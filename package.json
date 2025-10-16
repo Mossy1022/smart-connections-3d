@@ -1,0 +1,24 @@
+{
+  "name": "smart-connections-3d",
+  "version": "1.0.0",
+  "description": "3D visualization for Smart Connections",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^16.11.6",
+    "@types/three": "^0.152.0",
+    "builtin-modules": "^5.0.0",
+    "esbuild": "0.17.3",
+    "obsidian": "latest",
+    "typescript": "4.7.4"
+  },
+  "dependencies": {
+    "three": "^0.152.0"
+  }
+}

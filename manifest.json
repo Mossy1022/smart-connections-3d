@@ -1,0 +1,10 @@
+{
+    "id": "smart-connections-3d",
+    "name": "Smart Connections 3D Visualizer",
+    "version": "1.0.0",
+    "minAppVersion": "0.15.0",
+    "description": "3D visualization of Smart Connections embeddings using semantic force-directed layout",
+    "author": "Your Name",
+    "authorUrl": "https://yourwebsite.com",
+    "isDesktopOnly": true
+  }
