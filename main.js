@@ -18013,6 +18013,187 @@ function transformVertex(vertexPosition, mvPosition, center, scale, sin, cos) {
   vertexPosition.y += _rotatedPosition.y;
   vertexPosition.applyMatrix4(_viewWorldMatrix);
 }
+var LineBasicMaterial = class extends Material {
+  constructor(parameters) {
+    super();
+    this.isLineBasicMaterial = true;
+    this.type = "LineBasicMaterial";
+    this.color = new Color(16777215);
+    this.map = null;
+    this.linewidth = 1;
+    this.linecap = "round";
+    this.linejoin = "round";
+    this.fog = true;
+    this.setValues(parameters);
+  }
+  copy(source) {
+    super.copy(source);
+    this.color.copy(source.color);
+    this.map = source.map;
+    this.linewidth = source.linewidth;
+    this.linecap = source.linecap;
+    this.linejoin = source.linejoin;
+    this.fog = source.fog;
+    return this;
+  }
+};
+var _start$1 = /* @__PURE__ */ new Vector3();
+var _end$1 = /* @__PURE__ */ new Vector3();
+var _inverseMatrix$1 = /* @__PURE__ */ new Matrix4();
+var _ray$1 = /* @__PURE__ */ new Ray();
+var _sphere$1 = /* @__PURE__ */ new Sphere();
+var Line = class extends Object3D {
+  constructor(geometry = new BufferGeometry(), material = new LineBasicMaterial()) {
+    super();
+    this.isLine = true;
+    this.type = "Line";
+    this.geometry = geometry;
+    this.material = material;
+    this.updateMorphTargets();
+  }
+  copy(source, recursive) {
+    super.copy(source, recursive);
+    this.material = source.material;
+    this.geometry = source.geometry;
+    return this;
+  }
+  computeLineDistances() {
+    const geometry = this.geometry;
+    if (geometry.index === null) {
+      const positionAttribute = geometry.attributes.position;
+      const lineDistances = [0];
+      for (let i = 1, l = positionAttribute.count; i < l; i++) {
+        _start$1.fromBufferAttribute(positionAttribute, i - 1);
+        _end$1.fromBufferAttribute(positionAttribute, i);
+        lineDistances[i] = lineDistances[i - 1];
+        lineDistances[i] += _start$1.distanceTo(_end$1);
+      }
+      geometry.setAttribute("lineDistance", new Float32BufferAttribute(lineDistances, 1));
+    } else {
+      console.warn("THREE.Line.computeLineDistances(): Computation only possible with non-indexed BufferGeometry.");
+    }
+    return this;
+  }
+  raycast(raycaster, intersects) {
+    const geometry = this.geometry;
+    const matrixWorld = this.matrixWorld;
+    const threshold = raycaster.params.Line.threshold;
+    const drawRange = geometry.drawRange;
+    if (geometry.boundingSphere === null)
+      geometry.computeBoundingSphere();
+    _sphere$1.copy(geometry.boundingSphere);
+    _sphere$1.applyMatrix4(matrixWorld);
+    _sphere$1.radius += threshold;
+    if (raycaster.ray.intersectsSphere(_sphere$1) === false)
+      return;
+    _inverseMatrix$1.copy(matrixWorld).invert();
+    _ray$1.copy(raycaster.ray).applyMatrix4(_inverseMatrix$1);
+    const localThreshold = threshold / ((this.scale.x + this.scale.y + this.scale.z) / 3);
+    const localThresholdSq = localThreshold * localThreshold;
+    const vStart = new Vector3();
+    const vEnd = new Vector3();
+    const interSegment = new Vector3();
+    const interRay = new Vector3();
+    const step = this.isLineSegments ? 2 : 1;
+    const index = geometry.index;
+    const attributes = geometry.attributes;
+    const positionAttribute = attributes.position;
+    if (index !== null) {
+      const start = Math.max(0, drawRange.start);
+      const end = Math.min(index.count, drawRange.start + drawRange.count);
+      for (let i = start, l = end - 1; i < l; i += step) {
+        const a = index.getX(i);
+        const b = index.getX(i + 1);
+        vStart.fromBufferAttribute(positionAttribute, a);
+        vEnd.fromBufferAttribute(positionAttribute, b);
+        const distSq = _ray$1.distanceSqToSegment(vStart, vEnd, interRay, interSegment);
+        if (distSq > localThresholdSq)
+          continue;
+        interRay.applyMatrix4(this.matrixWorld);
+        const distance = raycaster.ray.origin.distanceTo(interRay);
+        if (distance < raycaster.near || distance > raycaster.far)
+          continue;
+        intersects.push({
+          distance,
+          // What do we want? intersection point on the ray or on the segment??
+          // point: raycaster.ray.at( distance ),
+          point: interSegment.clone().applyMatrix4(this.matrixWorld),
+          index: i,
+          face: null,
+          faceIndex: null,
+          object: this
+        });
+      }
+    } else {
+      const start = Math.max(0, drawRange.start);
+      const end = Math.min(positionAttribute.count, drawRange.start + drawRange.count);
+      for (let i = start, l = end - 1; i < l; i += step) {
+        vStart.fromBufferAttribute(positionAttribute, i);
+        vEnd.fromBufferAttribute(positionAttribute, i + 1);
+        const distSq = _ray$1.distanceSqToSegment(vStart, vEnd, interRay, interSegment);
+        if (distSq > localThresholdSq)
+          continue;
+        interRay.applyMatrix4(this.matrixWorld);
+        const distance = raycaster.ray.origin.distanceTo(interRay);
+        if (distance < raycaster.near || distance > raycaster.far)
+          continue;
+        intersects.push({
+          distance,
+          // What do we want? intersection point on the ray or on the segment??
+          // point: raycaster.ray.at( distance ),
+          point: interSegment.clone().applyMatrix4(this.matrixWorld),
+          index: i,
+          face: null,
+          faceIndex: null,
+          object: this
+        });
+      }
+    }
+  }
+  updateMorphTargets() {
+    const geometry = this.geometry;
+    const morphAttributes = geometry.morphAttributes;
+    const keys = Object.keys(morphAttributes);
+    if (keys.length > 0) {
+      const morphAttribute = morphAttributes[keys[0]];
+      if (morphAttribute !== void 0) {
+        this.morphTargetInfluences = [];
+        this.morphTargetDictionary = {};
+        for (let m = 0, ml = morphAttribute.length; m < ml; m++) {
+          const name = morphAttribute[m].name || String(m);
+          this.morphTargetInfluences.push(0);
+          this.morphTargetDictionary[name] = m;
+        }
+      }
+    }
+  }
+};
+var _start = /* @__PURE__ */ new Vector3();
+var _end = /* @__PURE__ */ new Vector3();
+var LineSegments = class extends Line {
+  constructor(geometry, material) {
+    super(geometry, material);
+    this.isLineSegments = true;
+    this.type = "LineSegments";
+  }
+  computeLineDistances() {
+    const geometry = this.geometry;
+    if (geometry.index === null) {
+      const positionAttribute = geometry.attributes.position;
+      const lineDistances = [];
+      for (let i = 0, l = positionAttribute.count; i < l; i += 2) {
+        _start.fromBufferAttribute(positionAttribute, i);
+        _end.fromBufferAttribute(positionAttribute, i + 1);
+        lineDistances[i] = i === 0 ? 0 : lineDistances[i - 1];
+        lineDistances[i + 1] = lineDistances[i] + _start.distanceTo(_end);
+      }
+      geometry.setAttribute("lineDistance", new Float32BufferAttribute(lineDistances, 1));
+    } else {
+      console.warn("THREE.LineSegments.computeLineDistances(): Computation only possible with non-indexed BufferGeometry.");
+    }
+    return this;
+  }
+};
 var CanvasTexture = class extends Texture {
   constructor(canvas, mapping, wrapS, wrapT, magFilter, minFilter, format, type, anisotropy) {
     super(canvas, mapping, wrapS, wrapT, magFilter, minFilter, format, type, anisotropy);
@@ -20042,6 +20223,1418 @@ var OrbitControls = class extends EventDispatcher {
   }
 };
 
+// omnibox.ts
+var OPERATORS = [
+  "tag",
+  "type",
+  "time",
+  "link",
+  "similar",
+  "not",
+  "degree",
+  "describe"
+];
+var Omnibox = class {
+  constructor(host, options = {}) {
+    this.tokens = [];
+    this.pillById = /* @__PURE__ */ new Map();
+    this.operatorSet = new Set(OPERATORS);
+    this.handleRootClick = () => {
+      this.inputEl.focus();
+    };
+    this.handleKeyDown = (event) => {
+      if (event.key === "Enter" || event.key === "Tab" || event.key === ",") {
+        if (this.commitInputValue()) {
+          event.preventDefault();
+        }
+        return;
+      }
+      if (event.key === "Backspace" && this.inputEl.value === "") {
+        const lastToken = this.tokens[this.tokens.length - 1];
+        if (lastToken) {
+          event.preventDefault();
+          const removed = this.removeToken(lastToken.id);
+          if (removed) {
+            this.inputEl.value = this.formatTokenForEditing(removed);
+            this.inputEl.focus();
+          }
+        }
+      }
+    };
+    this.handleBlur = () => {
+      this.commitInputValue();
+    };
+    this.handlePaste = (event) => {
+      var _a;
+      event.preventDefault();
+      const text = (_a = event.clipboardData) == null ? void 0 : _a.getData("text");
+      if (!text) {
+        return;
+      }
+      this.commitRawValue(text);
+    };
+    var _a;
+    this.host = host;
+    this.onChange = options.onChange;
+    this.rootEl = document.createElement("div");
+    this.rootEl.classList.add("smart-omnibox");
+    this.host.appendChild(this.rootEl);
+    this.trackEl = document.createElement("div");
+    this.trackEl.classList.add("smart-omnibox-track");
+    this.rootEl.appendChild(this.trackEl);
+    this.inputEl = document.createElement("input");
+    this.inputEl.type = "text";
+    this.inputEl.placeholder = (_a = options.placeholder) != null ? _a : "Filter by keyword or operator...";
+    this.inputEl.classList.add("smart-omnibox-input");
+    this.trackEl.appendChild(this.inputEl);
+    this.bindEvents();
+  }
+  getTokens() {
+    return [...this.tokens];
+  }
+  focus() {
+    this.inputEl.focus();
+  }
+  destroy() {
+    this.inputEl.removeEventListener("keydown", this.handleKeyDown);
+    this.inputEl.removeEventListener("blur", this.handleBlur);
+    this.inputEl.removeEventListener("paste", this.handlePaste);
+    this.rootEl.removeEventListener("click", this.handleRootClick);
+    if (this.rootEl.parentElement === this.host) {
+      this.host.removeChild(this.rootEl);
+    } else {
+      this.rootEl.remove();
+    }
+    this.pillById.clear();
+    this.tokens = [];
+  }
+  bindEvents() {
+    this.inputEl.addEventListener("keydown", this.handleKeyDown);
+    this.inputEl.addEventListener("blur", this.handleBlur);
+    this.inputEl.addEventListener("paste", this.handlePaste);
+    this.rootEl.addEventListener("click", this.handleRootClick);
+  }
+  commitInputValue() {
+    const value = this.inputEl.value.trim();
+    if (!value) {
+      this.inputEl.value = "";
+      return false;
+    }
+    this.commitRawValue(value);
+    this.inputEl.value = "";
+    return true;
+  }
+  commitRawValue(value) {
+    const parts = value.split(/[\n,]+/).map((part) => part.trim()).filter((part) => part.length > 0);
+    parts.forEach((part) => {
+      const token = this.createToken(part);
+      if (token) {
+        this.tokens.push(token);
+        this.renderToken(token);
+      }
+    });
+    if (parts.length > 0) {
+      this.emitChange();
+    }
+  }
+  createToken(rawValue) {
+    if (!rawValue) {
+      return null;
+    }
+    const cleaned = this.stripQuotes(rawValue.trim());
+    let operator;
+    let value = cleaned;
+    const colonIndex = cleaned.indexOf(":");
+    if (colonIndex !== -1) {
+      const potentialOperator = cleaned.slice(0, colonIndex).toLowerCase();
+      if (this.operatorSet.has(potentialOperator)) {
+        operator = potentialOperator;
+        value = cleaned.slice(colonIndex + 1).trim();
+        value = this.stripQuotes(value);
+      }
+    } else if (this.operatorSet.has(cleaned.toLowerCase())) {
+      operator = cleaned.toLowerCase();
+      value = "";
+    }
+    return {
+      id: this.generateId(),
+      kind: operator ? "operator" : "text",
+      raw: cleaned,
+      value: operator ? value : cleaned,
+      operator
+    };
+  }
+  renderToken(token) {
+    const pill = document.createElement("span");
+    pill.classList.add("smart-omnibox-pill");
+    if (token.kind === "operator") {
+      pill.classList.add("is-operator");
+      if (token.operator) {
+        pill.dataset.operator = token.operator;
+      }
+    }
+    const label = document.createElement("span");
+    label.classList.add("smart-omnibox-pill-label");
+    label.textContent = this.formatTokenLabel(token);
+    pill.appendChild(label);
+    const removeButton = document.createElement("button");
+    removeButton.type = "button";
+    removeButton.classList.add("smart-omnibox-pill-remove");
+    removeButton.ariaLabel = "Remove filter";
+    removeButton.textContent = "x";
+    removeButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      this.removeToken(token.id);
+    });
+    pill.appendChild(removeButton);
+    pill.addEventListener("click", () => {
+      const removed = this.removeToken(token.id);
+      if (removed) {
+        this.inputEl.value = this.formatTokenForEditing(removed);
+        this.inputEl.focus();
+      }
+    });
+    this.trackEl.insertBefore(pill, this.inputEl);
+    this.pillById.set(token.id, pill);
+  }
+  removeToken(id) {
+    const index = this.tokens.findIndex((token) => token.id === id);
+    if (index === -1) {
+      return null;
+    }
+    const [removed] = this.tokens.splice(index, 1);
+    const pill = this.pillById.get(id);
+    if (pill) {
+      pill.remove();
+      this.pillById.delete(id);
+    }
+    this.emitChange();
+    return removed;
+  }
+  emitChange() {
+    if (this.onChange) {
+      this.onChange(this.getTokens());
+    }
+  }
+  stripQuotes(value) {
+    if (value.length < 2) {
+      return value;
+    }
+    const first = value[0];
+    const last = value[value.length - 1];
+    if (first === '"' && last === '"' || first === "'" && last === "'") {
+      return value.slice(1, -1);
+    }
+    return value;
+  }
+  formatTokenLabel(token) {
+    if (token.kind === "operator" && token.operator) {
+      return token.value ? `${token.operator}: ${token.value}` : `${token.operator}:`;
+    }
+    return token.value;
+  }
+  formatTokenForEditing(token) {
+    if (token.kind === "operator" && token.operator) {
+      return token.value ? `${token.operator}: ${token.value}` : `${token.operator}: `;
+    }
+    return token.value;
+  }
+  generateId() {
+    return `token-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
+  }
+};
+
+// facet-rail.ts
+var FacetRailAST = class {
+  constructor() {
+    this.nodes = /* @__PURE__ */ new Map();
+    this.listeners = /* @__PURE__ */ new Set();
+    this.nodes.set("time_window", { type: "time_window", value: null });
+    this.nodes.set("degree_limit", { type: "degree_limit", value: null });
+    this.nodes.set("tag_family", { type: "tag_family", value: /* @__PURE__ */ new Set() });
+    this.nodes.set("provenance", { type: "provenance", value: "all" });
+    this.nodes.set("similarity_threshold", { type: "similarity_threshold", value: 0.3 });
+  }
+  /**
+   * Get a node by type
+   */
+  getNode(type) {
+    return this.nodes.get(type);
+  }
+  /**
+   * Set a node value
+   */
+  setNode(type, value, metadata) {
+    this.nodes.set(type, { type, value, metadata });
+    this.notify();
+  }
+  /**
+   * Subscribe to AST changes
+   */
+  subscribe(listener) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+  /**
+   * Notify all listeners of changes
+   */
+  notify() {
+    this.listeners.forEach((listener) => listener(this));
+  }
+  /**
+   * Convert AST to Omnibox tokens (AST → Omnibox)
+   */
+  toOmniboxTokens() {
+    const tokens = [];
+    let idCounter = 0;
+    const timeNode = this.nodes.get("time_window");
+    if (timeNode && timeNode.value) {
+      tokens.push({
+        id: `facet-time-${idCounter++}`,
+        kind: "operator",
+        raw: `time:${timeNode.value}`,
+        value: timeNode.value,
+        operator: "time"
+      });
+    }
+    const degreeNode = this.nodes.get("degree_limit");
+    if (degreeNode && degreeNode.value) {
+      tokens.push({
+        id: `facet-degree-${idCounter++}`,
+        kind: "operator",
+        raw: `degree:${degreeNode.value}`,
+        value: degreeNode.value,
+        operator: "degree"
+      });
+    }
+    const tagNode = this.nodes.get("tag_family");
+    if (tagNode && tagNode.value instanceof Set && tagNode.value.size > 0) {
+      for (const tag of tagNode.value) {
+        tokens.push({
+          id: `facet-tag-${idCounter++}`,
+          kind: "operator",
+          raw: `tag:${tag}`,
+          value: tag,
+          operator: "tag"
+        });
+      }
+    }
+    const provNode = this.nodes.get("provenance");
+    if (provNode && provNode.value !== "all") {
+      tokens.push({
+        id: `facet-provenance-${idCounter++}`,
+        kind: "operator",
+        raw: `tag:${provNode.value}`,
+        value: provNode.value,
+        operator: "tag"
+        // Using tag operator to filter by provenance tags
+      });
+    }
+    return tokens;
+  }
+  /**
+   * Update AST from Omnibox tokens (Omnibox → AST)
+   */
+  fromOmniboxTokens(tokens) {
+    const newTags = /* @__PURE__ */ new Set();
+    let hasTimeToken = false;
+    let hasDegreeToken = false;
+    for (const token of tokens) {
+      if (token.operator === "time") {
+        this.nodes.set("time_window", { type: "time_window", value: token.value });
+        hasTimeToken = true;
+      } else if (token.operator === "degree") {
+        this.nodes.set("degree_limit", { type: "degree_limit", value: token.value });
+        hasDegreeToken = true;
+      } else if (token.operator === "tag") {
+        newTags.add(String(token.value));
+      }
+    }
+    if (!hasTimeToken) {
+      this.nodes.set("time_window", { type: "time_window", value: null });
+    }
+    if (!hasDegreeToken) {
+      this.nodes.set("degree_limit", { type: "degree_limit", value: null });
+    }
+    this.nodes.set("tag_family", { type: "tag_family", value: newTags });
+  }
+  /**
+   * Get all nodes
+   */
+  getAllNodes() {
+    return new Map(this.nodes);
+  }
+  /**
+   * Clear all filters
+   */
+  clear() {
+    this.nodes.set("time_window", { type: "time_window", value: null });
+    this.nodes.set("degree_limit", { type: "degree_limit", value: null });
+    this.nodes.set("tag_family", { type: "tag_family", value: /* @__PURE__ */ new Set() });
+    this.nodes.set("provenance", { type: "provenance", value: "all" });
+    this.nodes.set("similarity_threshold", { type: "similarity_threshold", value: 0.3 });
+    this.notify();
+  }
+};
+var FacetRail = class {
+  constructor(container, ast, options) {
+    this.allTags = /* @__PURE__ */ new Set();
+    this.container = container;
+    this.ast = ast;
+    this.onChange = options.onChange;
+    this.allTags = options.allTags || /* @__PURE__ */ new Set();
+    this.render();
+    this.ast.subscribe(() => this.updateFromAST());
+  }
+  /**
+   * Render the facet rail UI
+   */
+  render() {
+    this.container.empty();
+    this.container.addClass("facet-rail");
+    const header = this.container.createDiv({ cls: "facet-rail-header" });
+    header.createEl("h4", { text: "\u{1F50D} Filters" });
+    const clearBtn = header.createEl("button", {
+      text: "Clear",
+      cls: "facet-rail-clear-btn"
+    });
+    clearBtn.addEventListener("click", () => {
+      this.ast.clear();
+      this.onChange(this.ast);
+    });
+    this.renderTimeWindow();
+    this.renderDegreeLimit();
+    this.renderTagFamilies();
+    this.renderProvenance();
+    this.renderSimilarityThreshold();
+  }
+  /**
+   * Render Time Window control
+   */
+  renderTimeWindow() {
+    const section = this.container.createDiv({ cls: "facet-section" });
+    section.createEl("label", { text: "Time Window", cls: "facet-label" });
+    const select = section.createEl("select", { cls: "facet-select" });
+    const options = [
+      { value: "", label: "All time" },
+      { value: "1d", label: "Last day" },
+      { value: "7d", label: "Last week" },
+      { value: "30d", label: "Last month" },
+      { value: "90d", label: "Last 3 months" },
+      { value: "365d", label: "Last year" }
+    ];
+    options.forEach((opt) => {
+      const el = select.createEl("option", { value: opt.value, text: opt.label });
+    });
+    select.addEventListener("change", () => {
+      const value = select.value || null;
+      this.ast.setNode("time_window", value);
+      this.onChange(this.ast);
+    });
+    section.__select = select;
+  }
+  /**
+   * Render Degree Limit control
+   */
+  renderDegreeLimit() {
+    const section = this.container.createDiv({ cls: "facet-section" });
+    section.createEl("label", { text: "Connection Degree", cls: "facet-label" });
+    const wrapper = section.createDiv({ cls: "facet-input-wrapper" });
+    const input = wrapper.createEl("input", {
+      type: "text",
+      placeholder: "e.g., >=2, <=5",
+      cls: "facet-input"
+    });
+    input.addEventListener("input", () => {
+      const value = input.value.trim() || null;
+      this.ast.setNode("degree_limit", value);
+      this.onChange(this.ast);
+    });
+    section.__input = input;
+  }
+  /**
+   * Render Tag Families control
+   */
+  renderTagFamilies() {
+    const section = this.container.createDiv({ cls: "facet-section" });
+    section.createEl("label", { text: "Tags", cls: "facet-label" });
+    const tagContainer = section.createDiv({ cls: "facet-tag-container" });
+    if (this.allTags.size > 0) {
+      const tagList = Array.from(this.allTags).sort();
+      tagList.slice(0, 10).forEach((tag) => {
+        const tagItem = tagContainer.createDiv({ cls: "facet-tag-item" });
+        const checkbox = tagItem.createEl("input", { type: "checkbox" });
+        checkbox.id = `tag-${tag}`;
+        const label = tagItem.createEl("label", { text: tag });
+        label.htmlFor = `tag-${tag}`;
+        checkbox.addEventListener("change", () => {
+          var _a;
+          const currentTags = ((_a = this.ast.getNode("tag_family")) == null ? void 0 : _a.value) || /* @__PURE__ */ new Set();
+          const newTags = new Set(currentTags);
+          if (checkbox.checked) {
+            newTags.add(tag);
+          } else {
+            newTags.delete(tag);
+          }
+          this.ast.setNode("tag_family", newTags);
+          this.onChange(this.ast);
+        });
+      });
+      if (tagList.length > 10) {
+        tagContainer.createEl("div", {
+          text: `+${tagList.length - 10} more tags`,
+          cls: "facet-tag-more"
+        });
+      }
+    } else {
+      tagContainer.createEl("div", {
+        text: "No tags found",
+        cls: "facet-empty"
+      });
+    }
+    section.__tagContainer = tagContainer;
+  }
+  /**
+   * Render Provenance control
+   */
+  renderProvenance() {
+    const section = this.container.createDiv({ cls: "facet-section" });
+    section.createEl("label", { text: "Provenance", cls: "facet-label" });
+    const select = section.createEl("select", { cls: "facet-select" });
+    const options = [
+      { value: "all", label: "All notes" },
+      { value: "human", label: "Human-created" },
+      { value: "extracted", label: "Auto-extracted" }
+    ];
+    options.forEach((opt) => {
+      select.createEl("option", { value: opt.value, text: opt.label });
+    });
+    select.addEventListener("change", () => {
+      this.ast.setNode("provenance", select.value);
+      this.onChange(this.ast);
+    });
+    section.__select = select;
+  }
+  /**
+   * Render Similarity Threshold control
+   */
+  renderSimilarityThreshold() {
+    const section = this.container.createDiv({ cls: "facet-section" });
+    const labelRow = section.createDiv({ cls: "facet-label-row" });
+    labelRow.createEl("label", { text: "Similarity Threshold", cls: "facet-label" });
+    const valueLabel = labelRow.createEl("span", {
+      text: "0.30",
+      cls: "facet-value-label"
+    });
+    const slider = section.createEl("input", {
+      type: "range",
+      cls: "facet-slider"
+    });
+    slider.min = "0";
+    slider.max = "1";
+    slider.step = "0.05";
+    slider.value = "0.3";
+    slider.addEventListener("input", () => {
+      const value = parseFloat(slider.value);
+      valueLabel.textContent = value.toFixed(2);
+      this.ast.setNode("similarity_threshold", value);
+      this.onChange(this.ast);
+    });
+    section.__slider = slider;
+    section.__valueLabel = valueLabel;
+  }
+  /**
+   * Update UI from AST (for bidirectional binding)
+   */
+  updateFromAST() {
+    const timeSection = this.container.querySelector(".facet-section:nth-child(2)");
+    if (timeSection == null ? void 0 : timeSection.__select) {
+      const timeNode = this.ast.getNode("time_window");
+      timeSection.__select.value = (timeNode == null ? void 0 : timeNode.value) || "";
+    }
+    const degreeSection = this.container.querySelector(".facet-section:nth-child(3)");
+    if (degreeSection == null ? void 0 : degreeSection.__input) {
+      const degreeNode = this.ast.getNode("degree_limit");
+      degreeSection.__input.value = (degreeNode == null ? void 0 : degreeNode.value) || "";
+    }
+    const provSection = this.container.querySelector(".facet-section:nth-child(5)");
+    if (provSection == null ? void 0 : provSection.__select) {
+      const provNode = this.ast.getNode("provenance");
+      provSection.__select.value = (provNode == null ? void 0 : provNode.value) || "all";
+    }
+    const simSection = this.container.querySelector(".facet-section:nth-child(6)");
+    if ((simSection == null ? void 0 : simSection.__slider) && (simSection == null ? void 0 : simSection.__valueLabel)) {
+      const simNode = this.ast.getNode("similarity_threshold");
+      const value = (simNode == null ? void 0 : simNode.value) || 0.3;
+      simSection.__slider.value = String(value);
+      simSection.__valueLabel.textContent = value.toFixed(2);
+    }
+  }
+  /**
+   * Update available tags
+   */
+  updateTags(tags) {
+    this.allTags = tags;
+    const tagSection = this.container.querySelector(".facet-section:nth-child(4)");
+    if (tagSection) {
+      tagSection.remove();
+      this.renderTagFamilies();
+    }
+  }
+  /**
+   * Destroy the facet rail
+   */
+  destroy() {
+    this.container.empty();
+  }
+};
+
+// color-strategy.ts
+var TAG_FAMILY_PREFIXES = {
+  topic: ["topic/", "category/", "area/"],
+  status: ["status/", "state/"],
+  project: ["project/", "proj/"],
+  person: ["person/", "people/", "author/"],
+  source: ["source/", "from/"]
+};
+var FAMILY_BASE_HUES = {
+  topic: 210,
+  // Blue
+  status: 120,
+  // Green
+  project: 280,
+  // Purple
+  person: 30,
+  // Orange
+  source: 180
+  // Cyan
+};
+var PATTERNS = [
+  "solid",
+  "dots",
+  "stripes",
+  "grid",
+  "diagonal",
+  "crosshatch"
+];
+var SHAPES = [
+  "sphere",
+  "box",
+  "octahedron",
+  "tetrahedron",
+  "dodecahedron",
+  "icosahedron"
+];
+var ColorStrategy = class {
+  constructor(config = {}) {
+    this.tagRegistry = /* @__PURE__ */ new Map();
+    this.familyTags = /* @__PURE__ */ new Map();
+    this.tagCounts = /* @__PURE__ */ new Map();
+    this.config = {
+      maxVisibleTags: 12,
+      colorblindMode: false,
+      activeFamily: "topic",
+      ...config
+    };
+    Object.keys(TAG_FAMILY_PREFIXES).forEach((family) => {
+      this.familyTags.set(family, /* @__PURE__ */ new Set());
+    });
+  }
+  /**
+   * Register tags from nodes
+   */
+  registerTags(tags) {
+    tags.forEach((tag) => {
+      const family = this.inferTagFamily(tag);
+      const familySet = this.familyTags.get(family);
+      if (familySet) {
+        familySet.add(tag);
+      }
+      this.tagCounts.set(tag, (this.tagCounts.get(tag) || 0) + 1);
+      if (!this.tagRegistry.has(tag)) {
+        this.assignTagColor(tag, family);
+      }
+    });
+  }
+  /**
+   * Infer which family a tag belongs to based on prefix
+   */
+  inferTagFamily(tag) {
+    const lowerTag = tag.toLowerCase();
+    for (const [family, prefixes] of Object.entries(TAG_FAMILY_PREFIXES)) {
+      if (prefixes.some((prefix) => lowerTag.startsWith(prefix))) {
+        return family;
+      }
+    }
+    return "topic";
+  }
+  /**
+   * Assign a color to a tag based on its family
+   */
+  assignTagColor(tag, family) {
+    const familySet = this.familyTags.get(family);
+    if (!familySet)
+      return;
+    const baseHue = FAMILY_BASE_HUES[family];
+    const familySize = familySet.size;
+    const tagIndex = Array.from(familySet).indexOf(tag);
+    const hueOffset = tagIndex / Math.max(familySize, 1) * 60 - 30;
+    const hue = (baseHue + hueOffset + 360) % 360;
+    const color = new Color().setHSL(hue / 360, 0.7, 0.6);
+    this.tagRegistry.set(tag, {
+      tag,
+      family,
+      hue,
+      color,
+      count: this.tagCounts.get(tag) || 0
+    });
+  }
+  /**
+   * Get visual state for a node based on its tags
+   */
+  getNodeVisualState(tags, mtime, connections, pinCount = 0, isExtracted = false, isHovered = false) {
+    const relevantTags = tags.filter((tag) => this.inferTagFamily(tag) === this.config.activeFamily).sort((a, b) => {
+      const countA = this.tagCounts.get(a) || 0;
+      const countB = this.tagCounts.get(b) || 0;
+      return countB - countA;
+    });
+    const primaryTag = relevantTags[0];
+    const primaryInfo = primaryTag ? this.tagRegistry.get(primaryTag) : null;
+    const fillColor = (primaryInfo == null ? void 0 : primaryInfo.color) || new Color(0.5, 0.5, 0.7);
+    const emissiveColor = fillColor.clone();
+    const age = (Date.now() - mtime) / (365 * 24 * 60 * 60 * 1e3);
+    const haloIntensity = Math.max(0, 1 - age);
+    const sizeMultiplier = 1 + Math.log(1 + connections) * 0.15 + pinCount * 0.1;
+    const size = 0.6 * sizeMultiplier;
+    const state = {
+      fillColor,
+      emissiveColor,
+      emissiveIntensity: 0.5,
+      size,
+      haloIntensity,
+      dottedOutline: isExtracted
+    };
+    if (relevantTags.length > 1 && isHovered) {
+      const secondaryTag = relevantTags[1];
+      const secondaryInfo = this.tagRegistry.get(secondaryTag);
+      if (secondaryInfo) {
+        state.outlineColor = secondaryInfo.color;
+        state.outlineGlowIntensity = 0.8;
+      }
+    }
+    if (this.config.colorblindMode) {
+      const tagIndex = primaryTag ? Array.from(this.familyTags.get(this.config.activeFamily) || []).indexOf(primaryTag) : 0;
+      state.pattern = PATTERNS[tagIndex % PATTERNS.length];
+      state.shape = SHAPES[tagIndex % SHAPES.length];
+    }
+    return state;
+  }
+  /**
+   * Get all tags for a specific family
+   */
+  getTagsForFamily(family) {
+    const familySet = this.familyTags.get(family);
+    if (!familySet)
+      return [];
+    return Array.from(familySet).map((tag) => this.tagRegistry.get(tag)).filter((info) => info !== void 0).sort((a, b) => b.count - a.count);
+  }
+  /**
+   * Get visible tags (capped at maxVisibleTags)
+   */
+  getVisibleTags(family) {
+    const allTags = this.getTagsForFamily(family);
+    return allTags.slice(0, this.config.maxVisibleTags);
+  }
+  /**
+   * Get overflow tags (beyond maxVisibleTags)
+   */
+  getOverflowTags(family) {
+    const allTags = this.getTagsForFamily(family);
+    return allTags.slice(this.config.maxVisibleTags);
+  }
+  /**
+   * Get total count of overflow tags
+   */
+  getOverflowCount(family) {
+    return this.getOverflowTags(family).reduce((sum, info) => sum + info.count, 0);
+  }
+  /**
+   * Update configuration
+   */
+  setConfig(config) {
+    this.config = { ...this.config, ...config };
+  }
+  /**
+   * Get current configuration
+   */
+  getConfig() {
+    return { ...this.config };
+  }
+  /**
+   * Get tag info by tag name
+   */
+  getTagInfo(tag) {
+    return this.tagRegistry.get(tag);
+  }
+  /**
+   * Get all registered tags
+   */
+  getAllTags() {
+    return Array.from(this.tagRegistry.values()).sort((a, b) => b.count - a.count);
+  }
+  /**
+   * Update tag count
+   */
+  updateTagCount(tag) {
+    const count = (this.tagCounts.get(tag) || 0) + 1;
+    this.tagCounts.set(tag, count);
+    const info = this.tagRegistry.get(tag);
+    if (info) {
+      info.count = count;
+    }
+  }
+  /**
+   * Check if a node has tags in the active family
+   */
+  hasActiveFamily(tags) {
+    return tags.some((tag) => this.inferTagFamily(tag) === this.config.activeFamily);
+  }
+  /**
+   * Get active family
+   */
+  getActiveFamily() {
+    return this.config.activeFamily;
+  }
+  /**
+   * Set active family
+   */
+  setActiveFamily(family) {
+    this.config.activeFamily = family;
+  }
+};
+
+// legend.ts
+var Legend = class {
+  constructor(container, options) {
+    this.rootEl = null;
+    this.familySwitcherEl = null;
+    this.tagListEl = null;
+    this.container = container;
+    this.colorStrategy = options.colorStrategy;
+    this.onFilterChange = options.onFilterChange;
+    this.onFamilyChange = options.onFamilyChange;
+    this.filterState = {
+      soloTags: /* @__PURE__ */ new Set(),
+      mutedTags: /* @__PURE__ */ new Set()
+    };
+    this.render();
+  }
+  /**
+   * Render the legend UI
+   */
+  render() {
+    this.container.empty();
+    this.container.addClass("legend-container");
+    this.rootEl = this.container.createDiv({ cls: "legend" });
+    const header = this.rootEl.createDiv({ cls: "legend-header" });
+    header.createEl("h4", { text: "\u{1F3A8} Legend" });
+    this.renderFamilySwitcher();
+    this.renderTagList();
+    this.renderFooter();
+  }
+  /**
+   * Render family switcher dropdown
+   */
+  renderFamilySwitcher() {
+    if (!this.rootEl)
+      return;
+    const section = this.rootEl.createDiv({ cls: "legend-section" });
+    section.createEl("label", { text: "Color by", cls: "legend-label" });
+    const select = section.createEl("select", { cls: "legend-family-select" });
+    this.familySwitcherEl = select;
+    const families = [
+      { value: "topic", label: "\u{1F4DA} Topic" },
+      { value: "status", label: "\u2713 Status" },
+      { value: "project", label: "\u{1F4C1} Project" },
+      { value: "person", label: "\u{1F464} Person" },
+      { value: "source", label: "\u{1F517} Source" }
+    ];
+    families.forEach(({ value, label }) => {
+      const option = select.createEl("option", { value, text: label });
+      if (value === this.colorStrategy.getActiveFamily()) {
+        option.selected = true;
+      }
+    });
+    select.addEventListener("change", () => {
+      const family = select.value;
+      this.colorStrategy.setActiveFamily(family);
+      this.onFamilyChange(family);
+      this.refreshTagList();
+    });
+  }
+  /**
+   * Render tag list with swatches and counts
+   */
+  renderTagList() {
+    if (!this.rootEl)
+      return;
+    const section = this.rootEl.createDiv({ cls: "legend-section legend-tags-section" });
+    this.tagListEl = section;
+    this.refreshTagList();
+  }
+  /**
+   * Refresh the tag list (called when family changes or state updates)
+   */
+  refreshTagList() {
+    if (!this.tagListEl)
+      return;
+    this.tagListEl.empty();
+    const activeFamily = this.colorStrategy.getActiveFamily();
+    const visibleTags = this.colorStrategy.getVisibleTags(activeFamily);
+    const overflowCount = this.colorStrategy.getOverflowCount(activeFamily);
+    visibleTags.forEach((tagInfo) => {
+      this.renderTagItem(tagInfo);
+    });
+    if (overflowCount > 0) {
+      this.renderOtherItem(overflowCount);
+    }
+    if (visibleTags.length === 0 && overflowCount === 0) {
+      this.tagListEl.createDiv({
+        text: `No ${activeFamily} tags found`,
+        cls: "legend-empty"
+      });
+    }
+  }
+  /**
+   * Render a single tag item
+   */
+  renderTagItem(tagInfo) {
+    if (!this.tagListEl)
+      return;
+    const item = this.tagListEl.createDiv({ cls: "legend-tag-item" });
+    const isSolo = this.filterState.soloTags.has(tagInfo.tag);
+    const isMuted = this.filterState.mutedTags.has(tagInfo.tag);
+    if (isSolo)
+      item.addClass("is-solo");
+    if (isMuted)
+      item.addClass("is-muted");
+    const swatch = item.createDiv({ cls: "legend-swatch" });
+    const rgb = tagInfo.color.getStyle();
+    swatch.style.backgroundColor = rgb;
+    const labelWrapper = item.createDiv({ cls: "legend-label-wrapper" });
+    labelWrapper.createEl("span", {
+      text: this.formatTagLabel(tagInfo.tag),
+      cls: "legend-tag-label"
+    });
+    labelWrapper.createEl("span", {
+      text: String(tagInfo.count),
+      cls: "legend-tag-count"
+    });
+    item.addEventListener("click", (e) => {
+      if (e.shiftKey) {
+        this.toggleSolo(tagInfo.tag);
+      } else {
+        this.toggleMute(tagInfo.tag);
+      }
+      this.refreshTagList();
+      this.notifyFilterChange();
+    });
+    item.addEventListener("mouseenter", () => {
+      item.addClass("is-hovered");
+    });
+    item.addEventListener("mouseleave", () => {
+      item.removeClass("is-hovered");
+    });
+  }
+  /**
+   * Render "other" group for overflow tags
+   */
+  renderOtherItem(count) {
+    if (!this.tagListEl)
+      return;
+    const item = this.tagListEl.createDiv({ cls: "legend-tag-item legend-other-item" });
+    const swatch = item.createDiv({ cls: "legend-swatch" });
+    swatch.style.backgroundColor = "#666";
+    const labelWrapper = item.createDiv({ cls: "legend-label-wrapper" });
+    labelWrapper.createEl("span", {
+      text: "Other",
+      cls: "legend-tag-label"
+    });
+    labelWrapper.createEl("span", {
+      text: String(count),
+      cls: "legend-tag-count"
+    });
+  }
+  /**
+   * Render footer with action buttons
+   */
+  renderFooter() {
+    if (!this.rootEl)
+      return;
+    const footer = this.rootEl.createDiv({ cls: "legend-footer" });
+    const clearBtn = footer.createEl("button", {
+      text: "Clear Filters",
+      cls: "legend-btn"
+    });
+    clearBtn.addEventListener("click", () => {
+      this.clearFilters();
+      this.refreshTagList();
+      this.notifyFilterChange();
+    });
+  }
+  /**
+   * Format tag label (remove family prefix)
+   */
+  formatTagLabel(tag) {
+    const parts = tag.split("/");
+    return parts.length > 1 ? parts.slice(1).join("/") : tag;
+  }
+  /**
+   * Toggle solo state for a tag
+   */
+  toggleSolo(tag) {
+    if (this.filterState.soloTags.has(tag)) {
+      this.filterState.soloTags.delete(tag);
+    } else {
+      this.filterState.soloTags.add(tag);
+      this.filterState.mutedTags.delete(tag);
+    }
+  }
+  /**
+   * Toggle mute state for a tag
+   */
+  toggleMute(tag) {
+    if (this.filterState.mutedTags.has(tag)) {
+      this.filterState.mutedTags.delete(tag);
+    } else {
+      this.filterState.mutedTags.add(tag);
+      this.filterState.soloTags.delete(tag);
+    }
+  }
+  /**
+   * Clear all filters
+   */
+  clearFilters() {
+    this.filterState.soloTags.clear();
+    this.filterState.mutedTags.clear();
+  }
+  /**
+   * Notify parent of filter changes
+   */
+  notifyFilterChange() {
+    this.onFilterChange(this.filterState);
+  }
+  /**
+   * Get current filter state
+   */
+  getFilterState() {
+    return {
+      soloTags: new Set(this.filterState.soloTags),
+      mutedTags: new Set(this.filterState.mutedTags)
+    };
+  }
+  /**
+   * Update color strategy (when state changes externally)
+   */
+  updateColorStrategy(colorStrategy) {
+    this.colorStrategy = colorStrategy;
+    this.refreshTagList();
+  }
+  /**
+   * Refresh the entire legend
+   */
+  refresh() {
+    this.refreshTagList();
+  }
+  /**
+   * Destroy the legend
+   */
+  destroy() {
+    this.container.empty();
+    this.rootEl = null;
+    this.familySwitcherEl = null;
+    this.tagListEl = null;
+  }
+};
+
+// lens.ts
+var LensManager = class {
+  constructor() {
+    this.lenses = /* @__PURE__ */ new Map();
+    this.activeLensId = null;
+    this.storageKey = "smart-3d-lenses";
+    this.activeKey = "smart-3d-active-lens";
+    this.loadFromStorage();
+  }
+  /**
+   * Create a new lens
+   */
+  createLens(name, config) {
+    const lens = {
+      id: this.generateId(),
+      name,
+      created: Date.now(),
+      modified: Date.now(),
+      ...config
+    };
+    this.lenses.set(lens.id, lens);
+    this.saveToStorage();
+    return lens;
+  }
+  /**
+   * Update an existing lens
+   */
+  updateLens(id, updates) {
+    const lens = this.lenses.get(id);
+    if (!lens)
+      return null;
+    const updated = {
+      ...lens,
+      ...updates,
+      modified: Date.now()
+    };
+    this.lenses.set(id, updated);
+    this.saveToStorage();
+    return updated;
+  }
+  /**
+   * Delete a lens
+   */
+  deleteLens(id) {
+    const deleted = this.lenses.delete(id);
+    if (deleted) {
+      if (this.activeLensId === id) {
+        this.activeLensId = null;
+        this.saveActiveToStorage();
+      }
+      this.saveToStorage();
+    }
+    return deleted;
+  }
+  /**
+   * Get a lens by ID
+   */
+  getLens(id) {
+    return this.lenses.get(id) || null;
+  }
+  /**
+   * Get all lenses
+   */
+  getAllLenses() {
+    return Array.from(this.lenses.values()).sort((a, b) => b.modified - a.modified);
+  }
+  /**
+   * Set active lens
+   */
+  setActiveLens(id) {
+    this.activeLensId = id;
+    this.saveActiveToStorage();
+  }
+  /**
+   * Get active lens
+   */
+  getActiveLens() {
+    return this.activeLensId ? this.getLens(this.activeLensId) : null;
+  }
+  /**
+   * Get active lens ID
+   */
+  getActiveLensId() {
+    return this.activeLensId;
+  }
+  /**
+   * Duplicate a lens
+   */
+  duplicateLens(id, newName) {
+    const original = this.lenses.get(id);
+    if (!original)
+      return null;
+    const duplicate = {
+      ...original,
+      id: this.generateId(),
+      name: newName || `${original.name} (Copy)`,
+      created: Date.now(),
+      modified: Date.now()
+    };
+    this.lenses.set(duplicate.id, duplicate);
+    this.saveToStorage();
+    return duplicate;
+  }
+  /**
+   * Export lens to JSON
+   */
+  exportLens(id) {
+    const lens = this.lenses.get(id);
+    if (!lens)
+      return null;
+    return JSON.stringify(lens, null, 2);
+  }
+  /**
+   * Import lens from JSON
+   */
+  importLens(json) {
+    try {
+      const data = JSON.parse(json);
+      if (!data.name || !data.colorFamily) {
+        throw new Error("Invalid lens data");
+      }
+      const lens = {
+        id: this.generateId(),
+        name: data.name,
+        description: data.description,
+        created: Date.now(),
+        modified: Date.now(),
+        query: data.query || [],
+        facetFilters: data.facetFilters || {
+          timeWindow: null,
+          degreeLimit: null,
+          tagFamily: [],
+          provenance: "all",
+          similarityThreshold: 0.3
+        },
+        legendFilters: data.legendFilters || {
+          soloTags: [],
+          mutedTags: []
+        },
+        colorFamily: data.colorFamily || "topic",
+        colorblindMode: data.colorblindMode || false,
+        sort: data.sort || "default",
+        layoutConfig: data.layoutConfig
+      };
+      this.lenses.set(lens.id, lens);
+      this.saveToStorage();
+      return lens;
+    } catch (e) {
+      console.error("Failed to import lens:", e);
+      return null;
+    }
+  }
+  /**
+   * Search lenses by name or description
+   */
+  searchLenses(query) {
+    const lowerQuery = query.toLowerCase();
+    return this.getAllLenses().filter(
+      (lens) => lens.name.toLowerCase().includes(lowerQuery) || lens.description && lens.description.toLowerCase().includes(lowerQuery)
+    );
+  }
+  /**
+   * Load lenses from local storage
+   */
+  loadFromStorage() {
+    try {
+      const stored = localStorage.getItem(this.storageKey);
+      if (stored) {
+        const data = JSON.parse(stored);
+        this.lenses = new Map(Object.entries(data));
+      }
+      const activeId = localStorage.getItem(this.activeKey);
+      if (activeId && this.lenses.has(activeId)) {
+        this.activeLensId = activeId;
+      }
+    } catch (e) {
+      console.error("Failed to load lenses from storage:", e);
+    }
+  }
+  /**
+   * Save lenses to local storage
+   */
+  saveToStorage() {
+    try {
+      const data = Object.fromEntries(this.lenses);
+      localStorage.setItem(this.storageKey, JSON.stringify(data));
+    } catch (e) {
+      console.error("Failed to save lenses to storage:", e);
+    }
+  }
+  /**
+   * Save active lens ID to local storage
+   */
+  saveActiveToStorage() {
+    try {
+      if (this.activeLensId) {
+        localStorage.setItem(this.activeKey, this.activeLensId);
+      } else {
+        localStorage.removeItem(this.activeKey);
+      }
+    } catch (e) {
+      console.error("Failed to save active lens to storage:", e);
+    }
+  }
+  /**
+   * Generate unique ID
+   */
+  generateId() {
+    return `lens-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  }
+};
+var LensQuickSwitcher = class {
+  constructor(lensManager, options) {
+    this.modal = null;
+    this.inputEl = null;
+    this.resultsEl = null;
+    this.lensManager = lensManager;
+    this.onSelect = options.onSelect;
+    this.onClose = options.onClose;
+  }
+  /**
+   * Open the quick switcher
+   */
+  open() {
+    if (this.modal)
+      return;
+    this.modal = document.createElement("div");
+    this.modal.className = "lens-quick-switcher-modal";
+    const container = this.modal.createDiv({ cls: "lens-quick-switcher" });
+    const header = container.createDiv({ cls: "lens-switcher-header" });
+    header.createEl("h3", { text: "\u{1F50D} Quick Lens Switcher" });
+    const inputWrapper = container.createDiv({ cls: "lens-switcher-input-wrapper" });
+    this.inputEl = inputWrapper.createEl("input", {
+      type: "text",
+      placeholder: "Search lenses by name...",
+      cls: "lens-switcher-input"
+    });
+    this.resultsEl = container.createDiv({ cls: "lens-switcher-results" });
+    this.inputEl.addEventListener("input", () => this.updateResults());
+    this.inputEl.addEventListener("keydown", (e) => this.handleKeyDown(e));
+    this.modal.addEventListener("click", (e) => {
+      if (e.target === this.modal) {
+        this.close();
+      }
+    });
+    document.body.appendChild(this.modal);
+    this.updateResults();
+    this.inputEl.focus();
+  }
+  /**
+   * Close the quick switcher
+   */
+  close() {
+    if (this.modal) {
+      this.modal.remove();
+      this.modal = null;
+      this.inputEl = null;
+      this.resultsEl = null;
+      this.onClose();
+    }
+  }
+  /**
+   * Update results based on search
+   */
+  updateResults() {
+    if (!this.resultsEl || !this.inputEl)
+      return;
+    const query = this.inputEl.value.trim();
+    const lenses = query ? this.lensManager.searchLenses(query) : this.lensManager.getAllLenses();
+    this.resultsEl.empty();
+    if (lenses.length === 0) {
+      this.resultsEl.createDiv({
+        text: "No lenses found",
+        cls: "lens-switcher-empty"
+      });
+      return;
+    }
+    const activeLensId = this.lensManager.getActiveLensId();
+    lenses.forEach((lens, index) => {
+      const item = this.resultsEl.createDiv({ cls: "lens-switcher-item" });
+      if (lens.id === activeLensId) {
+        item.addClass("is-active");
+      }
+      if (index === 0) {
+        item.addClass("is-selected");
+      }
+      const main = item.createDiv({ cls: "lens-switcher-item-main" });
+      main.createEl("span", { text: "\u{1F441}\uFE0F", cls: "lens-switcher-icon" });
+      main.createEl("span", { text: lens.name, cls: "lens-switcher-name" });
+      const meta = item.createDiv({ cls: "lens-switcher-meta" });
+      meta.createEl("span", {
+        text: this.formatDate(lens.modified),
+        cls: "lens-switcher-date"
+      });
+      meta.createEl("span", {
+        text: `${lens.colorFamily} \u2022 ${lens.sort}`,
+        cls: "lens-switcher-info"
+      });
+      if (lens.description) {
+        item.createDiv({
+          text: lens.description,
+          cls: "lens-switcher-description"
+        });
+      }
+      item.addEventListener("click", () => {
+        this.selectLens(lens);
+      });
+      item.addEventListener("mouseenter", () => {
+        this.resultsEl.querySelectorAll(".lens-switcher-item").forEach((el) => {
+          el.removeClass("is-selected");
+        });
+        item.addClass("is-selected");
+      });
+    });
+  }
+  /**
+   * Handle keyboard navigation
+   */
+  handleKeyDown(e) {
+    var _a, _b;
+    if (!this.resultsEl)
+      return;
+    const items = Array.from(this.resultsEl.querySelectorAll(".lens-switcher-item"));
+    const selectedIndex = items.findIndex((el) => el.hasClass("is-selected"));
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      const nextIndex = (selectedIndex + 1) % items.length;
+      items.forEach((el, i) => {
+        el.toggleClass("is-selected", i === nextIndex);
+      });
+      (_a = items[nextIndex]) == null ? void 0 : _a.scrollIntoView({ block: "nearest" });
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      const prevIndex = (selectedIndex - 1 + items.length) % items.length;
+      items.forEach((el, i) => {
+        el.toggleClass("is-selected", i === prevIndex);
+      });
+      (_b = items[prevIndex]) == null ? void 0 : _b.scrollIntoView({ block: "nearest" });
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const selectedItem = items[selectedIndex];
+      if (selectedItem) {
+        selectedItem.dispatchEvent(new MouseEvent("click"));
+      }
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      this.close();
+    }
+  }
+  /**
+   * Select a lens
+   */
+  selectLens(lens) {
+    this.onSelect(lens);
+    this.close();
+  }
+  /**
+   * Format date for display
+   */
+  formatDate(timestamp) {
+    const now = Date.now();
+    const diff = now - timestamp;
+    const minutes = Math.floor(diff / 6e4);
+    const hours = Math.floor(diff / 36e5);
+    const days = Math.floor(diff / 864e5);
+    if (minutes < 1)
+      return "Just now";
+    if (minutes < 60)
+      return `${minutes}m ago`;
+    if (hours < 24)
+      return `${hours}h ago`;
+    if (days < 7)
+      return `${days}d ago`;
+    const date = new Date(timestamp);
+    return date.toLocaleDateString();
+  }
+};
+
 // view.ts
 var VIEW_TYPE_3D = "smart-3d-view";
 var ThreeDView = class extends import_obsidian.ItemView {
@@ -20056,6 +21649,21 @@ var ThreeDView = class extends import_obsidian.ItemView {
     this.layout = null;
     this.animationId = null;
     this.resizeObserver = null;
+    this.omnibox = null;
+    this.edges = null;
+    this.activeQueryTokens = [];
+    this._lastQueryEmbedding = null;
+    this.facetRail = null;
+    this.facetAST = new FacetRailAST();
+    this._allTags = /* @__PURE__ */ new Set();
+    this.colorStrategy = null;
+    this.legend = null;
+    this.legendFilterState = { soloTags: /* @__PURE__ */ new Set(), mutedTags: /* @__PURE__ */ new Set() };
+    this.hoveredNode = null;
+    this.lensManager = new LensManager();
+    this.quickSwitcher = null;
+    this.currentSort = "default";
+    this.debouncedApply = this.debounce((tokens) => this.applyQueryTokens(tokens), 80);
     this.plugin = plugin;
   }
   getViewType() {
@@ -20089,11 +21697,476 @@ var ThreeDView = class extends import_obsidian.ItemView {
     }
     await this.initVisualization(container, smart_env);
   }
+  // --- helpers inside ThreeDView (or module scope) ---
+  cosine(a, b) {
+    var _a, _b;
+    const n = Math.min((_a = a == null ? void 0 : a.length) != null ? _a : 0, (_b = b == null ? void 0 : b.length) != null ? _b : 0);
+    if (n === 0)
+      return 0;
+    let dot = 0, na = 0, nb = 0;
+    for (let i = 0; i < n; i++) {
+      const ai = a[i], bi = b[i];
+      dot += ai * bi;
+      na += ai * ai;
+      nb += bi * bi;
+    }
+    const d = Math.sqrt(na) * Math.sqrt(nb);
+    return d === 0 ? 0 : dot / d;
+  }
+  parseTimeToken(v) {
+    const now = Date.now();
+    const rel = /^(\d+)([dhm])$/i.exec(v);
+    if (rel) {
+      const n = parseInt(rel[1], 10);
+      const unit = rel[2].toLowerCase();
+      const ms = unit === "d" ? n * 864e5 : unit === "h" ? n * 36e5 : n * 6e4;
+      return { from: now - ms, to: now };
+    }
+    const range = /^(\d{4}-\d{2}-\d{2}|\d{4}-\d{2})(?:\.\.|-)(\d{4}-\d{2}-\d{2}|\d{4}-\d{2})$/.exec(v);
+    const toMs = (s) => new Date(s.length === 7 ? s + "-01" : s).getTime();
+    if (range)
+      return { from: toMs(range[1]), to: toMs(range[2]) };
+    return {};
+  }
+  getNodeTags(key) {
+    var _a, _b;
+    const env = window.smart_env;
+    const src = (_b = (_a = env == null ? void 0 : env.smart_sources) == null ? void 0 : _a.items) == null ? void 0 : _b[key];
+    if (Array.isArray(src == null ? void 0 : src.tags))
+      return src.tags.map((t) => t.toLowerCase());
+    return [];
+  }
+  getNodeType(path) {
+    const dot = path.lastIndexOf(".");
+    return dot > -1 ? path.slice(dot + 1).toLowerCase() : "";
+  }
+  extractAllTags(nodes, smart_env) {
+    const tags = /* @__PURE__ */ new Set();
+    nodes.forEach((node) => {
+      const nodeTags = this.getNodeTags(node.key);
+      nodeTags.forEach((tag) => tags.add(tag));
+    });
+    return tags;
+  }
+  onFacetChange(ast) {
+    console.log("Facet changed, updating visualization...");
+    const facetTokens = ast.toOmniboxTokens();
+    const omniboxTokens = this.activeQueryTokens.filter(
+      (t) => !t.id.startsWith("facet-")
+    );
+    const mergedTokens = [...omniboxTokens, ...facetTokens];
+    this.activeQueryTokens = mergedTokens;
+    this.debouncedApply(mergedTokens);
+  }
+  onLegendFilterChange(state) {
+    console.log("Legend filter changed:", state);
+    this.legendFilterState = state;
+    this.applyLegendFilters();
+  }
+  onFamilyChange(family) {
+    var _a;
+    console.log("Family changed:", family);
+    if (this.colorStrategy) {
+      this.colorStrategy.setActiveFamily(family);
+      this.updateNodeColors();
+      (_a = this.legend) == null ? void 0 : _a.refresh();
+    }
+  }
+  applyLegendFilters() {
+    if (!this.nodes || !this.colorStrategy)
+      return;
+    for (const mesh of this.nodes) {
+      const data = mesh.userData;
+      const nodeTags = data.tags || [];
+      let visible = true;
+      if (this.legendFilterState.soloTags.size > 0) {
+        visible = nodeTags.some((tag) => this.legendFilterState.soloTags.has(tag));
+      }
+      if (this.legendFilterState.mutedTags.size > 0) {
+        const hasMutedTag = nodeTags.some((tag) => this.legendFilterState.mutedTags.has(tag));
+        if (hasMutedTag)
+          visible = false;
+      }
+      mesh.visible = visible;
+      const label = this.labels.get(mesh);
+      if (label)
+        label.visible = visible;
+    }
+  }
+  updateNodeColors() {
+    var _a;
+    if (!this.nodes || !this.colorStrategy)
+      return;
+    for (const mesh of this.nodes) {
+      const data = mesh.userData;
+      const isHovered = this.hoveredNode === mesh;
+      const visualState = this.colorStrategy.getNodeVisualState(
+        data.tags || [],
+        data.mtime,
+        ((_a = data.connections) == null ? void 0 : _a.length) || 0,
+        data.pinCount || 0,
+        data.isExtracted || false,
+        isHovered
+      );
+      const mat = mesh.material;
+      mat.color.copy(visualState.fillColor);
+      mat.emissive.copy(visualState.emissiveColor);
+      mat.emissiveIntensity = visualState.emissiveIntensity * (1 + visualState.haloIntensity);
+      const s = visualState.size;
+      mesh.scale.set(s, s, s);
+      mesh.userData.visualState = visualState;
+    }
+  }
+  /**
+   * Capture current state as a lens
+   */
+  captureCurrentLens() {
+    var _a, _b, _c, _d, _e, _f, _g;
+    const facetFilters = {
+      timeWindow: ((_a = this.facetAST.getNode("time_window")) == null ? void 0 : _a.value) || null,
+      degreeLimit: ((_b = this.facetAST.getNode("degree_limit")) == null ? void 0 : _b.value) || null,
+      tagFamily: Array.from(((_c = this.facetAST.getNode("tag_family")) == null ? void 0 : _c.value) || []),
+      provenance: ((_d = this.facetAST.getNode("provenance")) == null ? void 0 : _d.value) || "all",
+      similarityThreshold: ((_e = this.facetAST.getNode("similarity_threshold")) == null ? void 0 : _e.value) || 0.3
+    };
+    const legendFilters = {
+      soloTags: Array.from(this.legendFilterState.soloTags),
+      mutedTags: Array.from(this.legendFilterState.mutedTags)
+    };
+    const layoutConfig = this.layout ? {
+      semanticAttraction: this.layout.config.semanticAttraction,
+      repulsion: this.layout.config.repulsion
+    } : void 0;
+    return {
+      description: "Saved lens",
+      query: this.activeQueryTokens,
+      facetFilters,
+      legendFilters,
+      colorFamily: ((_f = this.colorStrategy) == null ? void 0 : _f.getActiveFamily()) || "topic",
+      colorblindMode: ((_g = this.colorStrategy) == null ? void 0 : _g.getConfig().colorblindMode) || false,
+      sort: this.currentSort,
+      layoutConfig
+    };
+  }
+  /**
+   * Apply a lens to restore scene state
+   */
+  applyLens(lens) {
+    var _a, _b;
+    console.log("Applying lens:", lens.name);
+    this.activeQueryTokens = [...lens.query];
+    if (this.omnibox) {
+    }
+    this.facetAST.setNode("time_window", lens.facetFilters.timeWindow);
+    this.facetAST.setNode("degree_limit", lens.facetFilters.degreeLimit);
+    this.facetAST.setNode("tag_family", new Set(lens.facetFilters.tagFamily));
+    this.facetAST.setNode("provenance", lens.facetFilters.provenance);
+    this.facetAST.setNode("similarity_threshold", lens.facetFilters.similarityThreshold);
+    this.legendFilterState = {
+      soloTags: new Set(lens.legendFilters.soloTags),
+      mutedTags: new Set(lens.legendFilters.mutedTags)
+    };
+    this.applyLegendFilters();
+    if (this.colorStrategy) {
+      this.colorStrategy.setActiveFamily(lens.colorFamily);
+      this.colorStrategy.setConfig({ colorblindMode: lens.colorblindMode });
+      this.updateNodeColors();
+    }
+    this.currentSort = lens.sort;
+    if (lens.layoutConfig && this.layout) {
+      this.layout.config.semanticAttraction = lens.layoutConfig.semanticAttraction;
+      this.layout.config.repulsion = lens.layoutConfig.repulsion;
+    }
+    this.debouncedApply(this.activeQueryTokens);
+    (_a = this.legend) == null ? void 0 : _a.refresh();
+    (_b = this.facetRail) == null ? void 0 : _b.updateTags(this._allTags);
+    this.lensManager.setActiveLens(lens.id);
+  }
+  /**
+   * Save current state as new lens
+   */
+  saveAsLens(name) {
+    const config = this.captureCurrentLens();
+    const lens = this.lensManager.createLens(name, config);
+    console.log("Saved lens:", lens);
+    return lens;
+  }
+  /**
+   * Update existing lens with current state
+   */
+  updateCurrentLens() {
+    const activeLens = this.lensManager.getActiveLens();
+    if (!activeLens)
+      return;
+    const config = this.captureCurrentLens();
+    this.lensManager.updateLens(activeLens.id, config);
+    console.log("Updated lens:", activeLens.name);
+  }
+  /**
+   * Open lens quick switcher
+   */
+  openLensQuickSwitcher() {
+    if (this.quickSwitcher)
+      return;
+    this.quickSwitcher = new LensQuickSwitcher(this.lensManager, {
+      onSelect: (lens) => {
+        this.applyLens(lens);
+      },
+      onClose: () => {
+        this.quickSwitcher = null;
+      }
+    });
+    this.quickSwitcher.open();
+  }
+  // Call this from onOmniboxTokensChanged via a debounced wrapper
+  applyQueryTokens(tokens) {
+    var _a, _b, _c, _d, _e, _f;
+    if (!this.nodes)
+      return;
+    if (!tokens || tokens.length === 0) {
+      for (const mesh of this.nodes) {
+        mesh.visible = true;
+        const mat = mesh.material;
+        mat.emissiveIntensity = 0.5;
+        mesh.scale.set(1, 1, 1);
+        mesh.userData.explain = [];
+      }
+      return;
+    }
+    console.log("Applying tokens to graph...", tokens);
+    const semanticTexts = [];
+    const negative = [];
+    const positive = [];
+    for (const t of tokens) {
+      if ((t.operator === "similar" || t.operator === "describe") && typeof t.value === "string")
+        semanticTexts.push(t.value);
+      (t.operator === "not" ? negative : positive).push(t);
+    }
+    let queryEmbedding = null;
+    const env = window.smart_env;
+    if (semanticTexts.length && typeof (env == null ? void 0 : env.embed) === "function") {
+      const results = semanticTexts.map((s) => env.embed(s)).filter(Boolean);
+      const hasPromise = results.some((r) => typeof (r == null ? void 0 : r.then) === "function");
+      if (hasPromise) {
+        Promise.all(results).then((embs) => {
+          if (!Array.isArray(embs) || !embs.length)
+            return;
+          const avg = embs[0].slice();
+          for (let i = 1; i < embs.length; i++) {
+            for (let j = 0; j < avg.length; j++)
+              avg[j] += embs[i][j];
+          }
+          for (let j = 0; j < avg.length; j++)
+            avg[j] /= embs.length;
+          this._lastQueryEmbedding = avg;
+          this.debouncedApply(this.activeQueryTokens);
+        }).catch(() => {
+        });
+        queryEmbedding = (_a = this._lastQueryEmbedding) != null ? _a : null;
+      } else {
+        const embs = results;
+        if (embs.length) {
+          queryEmbedding = embs[0].slice();
+          for (let i = 1; i < embs.length; i++) {
+            for (let j = 0; j < queryEmbedding.length; j++)
+              queryEmbedding[j] += embs[i][j];
+          }
+          for (let j = 0; j < queryEmbedding.length; j++)
+            queryEmbedding[j] /= embs.length;
+          this._lastQueryEmbedding = queryEmbedding;
+        }
+      }
+    }
+    const timeFilters = positive.filter((t) => t.operator === "time");
+    const typeFilters = positive.filter((t) => t.operator === "type");
+    const tagFilters = positive.filter((t) => t.operator === "tag");
+    const linkFilters = positive.filter((t) => t.operator === "link");
+    const degreeFilters = positive.filter((t) => t.operator === "degree");
+    for (const mesh of this.nodes) {
+      const data = mesh.userData;
+      const reasons = [];
+      let pass = true;
+      for (const ft of timeFilters) {
+        console.log("Checking time filter", ft.value, "against", new Date(data.mtime).toISOString());
+        const { from, to } = this.parseTimeToken(String(ft.value || ""));
+        if (from && data.mtime < from) {
+          pass = false;
+          break;
+        }
+        if (to && data.mtime > to) {
+          pass = false;
+          break;
+        }
+        if (from || to)
+          reasons.push(`time:${ft.value}`);
+      }
+      if (!pass) {
+        mesh.visible = false;
+        continue;
+      }
+      if (typeFilters.length) {
+        const typ = this.getNodeType(data.path);
+        const ok = typeFilters.some((t) => typ === String(t.value || "").toLowerCase());
+        if (!ok) {
+          mesh.visible = false;
+          continue;
+        }
+        reasons.push(`type:${typ}`);
+      }
+      if (tagFilters.length) {
+        const tags = this.getNodeTags(data.key);
+        const ok = tagFilters.every((t) => tags.includes(String(t.value || "").toLowerCase()));
+        if (!ok) {
+          mesh.visible = false;
+          continue;
+        }
+        for (const t of tagFilters)
+          reasons.push(`tag:${t.value}`);
+      }
+      if (linkFilters.length) {
+        const names = /* @__PURE__ */ new Set([data.name.toLowerCase(), data.path.toLowerCase(), data.key.toLowerCase()]);
+        const ok = linkFilters.every((t) => {
+          var _a2;
+          const q = String(t.value || "").toLowerCase();
+          return ((_a2 = data.connections) == null ? void 0 : _a2.some((k) => k.toLowerCase().includes(q))) || names.has(q);
+        });
+        if (!ok) {
+          mesh.visible = false;
+          continue;
+        }
+        for (const t of linkFilters)
+          reasons.push(`link:${t.value}`);
+      }
+      if (degreeFilters.length) {
+        const deg = (_c = (_b = data.connections) == null ? void 0 : _b.length) != null ? _c : 0;
+        const ok = degreeFilters.every((t) => {
+          const v = Number(t.value);
+          const raw = String(t.value || "").trim();
+          if (/^>=\d+$/.test(raw))
+            return deg >= parseInt(raw.slice(2), 10);
+          if (/^<=\d+$/.test(raw))
+            return deg <= parseInt(raw.slice(2), 10);
+          if (/^==?\d+$/.test(raw))
+            return deg === parseInt(raw.replace("==", ""), 10);
+          if (/^\d+$/.test(raw))
+            return deg === v;
+          return true;
+        });
+        if (!ok) {
+          mesh.visible = false;
+          continue;
+        }
+        reasons.push(`degree:${(_e = (_d = data.connections) == null ? void 0 : _d.length) != null ? _e : 0}`);
+      }
+      for (const nt of negative) {
+        const v = String(nt.value || "").toLowerCase();
+        if (nt.operator === "tag" && this.getNodeTags(data.key).includes(v)) {
+          pass = false;
+          reasons.push(`not:tag:${v}`);
+          break;
+        }
+        if (nt.operator === "type" && this.getNodeType(data.path) === v) {
+          pass = false;
+          reasons.push(`not:type:${v}`);
+          break;
+        }
+        if (nt.operator === "link" && ((_f = data.connections) == null ? void 0 : _f.some((k) => k.toLowerCase().includes(v)))) {
+          pass = false;
+          reasons.push(`not:link:${v}`);
+          break;
+        }
+        if (nt.operator === "time") {
+          const { from, to } = this.parseTimeToken(String(nt.value || ""));
+          if (from && data.mtime >= from || to && data.mtime <= to) {
+            pass = false;
+            reasons.push(`not:time:${nt.value}`);
+            break;
+          }
+        }
+      }
+      mesh.visible = pass;
+      const lbl = this.labels.get(mesh);
+      if (lbl)
+        lbl.visible = pass;
+      if (!pass)
+        continue;
+      let score = 0;
+      for (const t of tokens) {
+        if ((t.kind === "text" || t.operator === "describe") && typeof t.value === "string") {
+          const q = t.value.toLowerCase();
+          if (data.name.toLowerCase().includes(q) || data.path.toLowerCase().includes(q)) {
+            score += 0.25;
+            reasons.push(`text:${q}`);
+          }
+        }
+      }
+      if (queryEmbedding) {
+        const s2 = this.cosine(data.embedding, queryEmbedding);
+        if (s2 > 0.3) {
+          score += (s2 - 0.3) * 1.2;
+          reasons.push(`similar:${s2.toFixed(2)}`);
+        }
+      } else {
+        for (const t of tokens) {
+          if (t.operator === "similar" && typeof t.value === "string") {
+            const q = t.value.toLowerCase();
+            if (data.name.toLowerCase().includes(q)) {
+              score += 0.3;
+              reasons.push(`similar~name`);
+            }
+          }
+        }
+      }
+      if (tagFilters.length)
+        score += 0.1;
+      const mat = mesh.material;
+      const intensity = MathUtils.clamp(0.5 + score, 0.3, 1.4);
+      mat.emissiveIntensity = intensity;
+      const s = MathUtils.clamp(1 + score * 0.6, 0.85, 1.6);
+      mesh.scale.set(s, s, s);
+      mesh.userData.explain = reasons;
+    }
+  }
+  debounce(fn, ms) {
+    let id;
+    return (...args) => {
+      if (id)
+        cancelAnimationFrame(id);
+      const start = performance.now();
+      id = requestAnimationFrame(() => {
+        if (performance.now() - start >= ms)
+          fn(...args);
+        else
+          id = requestAnimationFrame(() => fn(...args));
+      });
+    };
+  }
   async initVisualization(container, smart_env) {
+    var _a;
+    const facetRailContainer = container.createDiv({ cls: "facet-rail-container" });
     const canvasContainer = container.createDiv({ cls: "smart-3d-canvas" });
+    const legendContainer = container.createDiv({ cls: "legend-container" });
     const controlsDiv = container.createDiv({ cls: "smart-3d-controls" });
     controlsDiv.innerHTML = `
       <h4>\u{1F3AF} 3D Knowledge Graph</h4>
+      <div class="smart-omnibox-section">
+        <div class="smart-omnibox-label">Query</div>
+        <div id="smart-omnibox-root" class="smart-omnibox-mount"></div>
+        <div class="smart-omnibox-helper">Operators: tag, type, time, link, similar, not, degree, describe</div>
+      </div>
+
+      <div class="lens-controls">
+        <div class="lens-controls-header">
+          <span class="lens-controls-label">Lens</span>
+          <span id="lens-active-name" class="lens-active-name">None</span>
+        </div>
+        <div class="lens-controls-buttons">
+          <button id="lens-switcher-btn" class="lens-btn" title="Quick Switcher (Ctrl+L)">\u{1F441}\uFE0F</button>
+          <button id="lens-save-btn" class="lens-btn" title="Save Lens">\u{1F4BE}</button>
+          <button id="lens-update-btn" class="lens-btn" title="Update Current" disabled>\u{1F504}</button>
+        </div>
+      </div>
+
       <div id="status">Loading...</div>
       <div class="smart-3d-slider">
         <label>Semantic Force: <span id="semantic-value">0.08</span></label>
@@ -20105,34 +22178,90 @@ var ThreeDView = class extends import_obsidian.ItemView {
       </div>
       <button id="recompute-btn" class="mod-cta" style="width: 100%; margin-top: 10px;">Recompute Layout</button>
     `;
-    const nodes = this.extractNodes(smart_env);
+    const omniboxMount = controlsDiv.querySelector("#smart-omnibox-root");
+    if (omniboxMount) {
+      (_a = this.omnibox) == null ? void 0 : _a.destroy();
+      this.omnibox = new Omnibox(omniboxMount, {
+        onChange: (tokens) => this.onOmniboxTokensChanged(tokens),
+        placeholder: "Search notes or use operators..."
+      });
+    }
+    const nodes = await this.extractNodes(smart_env);
     if (nodes.length === 0) {
       controlsDiv.querySelector("#status").textContent = "No notes with embeddings found";
       return;
     }
     controlsDiv.querySelector("#status").textContent = `Found ${nodes.length} notes`;
+    this._allTags = this.extractAllTags(nodes, smart_env);
+    const allNodeTags = nodes.flatMap((n) => n.tags);
+    this.colorStrategy = new ColorStrategy({
+      maxVisibleTags: 12,
+      colorblindMode: false,
+      activeFamily: "topic"
+    });
+    this.colorStrategy.registerTags(allNodeTags);
+    this.facetRail = new FacetRail(facetRailContainer, this.facetAST, {
+      onChange: (ast) => this.onFacetChange(ast),
+      allTags: this._allTags
+    });
+    this.legend = new Legend(legendContainer, {
+      colorStrategy: this.colorStrategy,
+      onFilterChange: (state) => this.onLegendFilterChange(state),
+      onFamilyChange: (family) => this.onFamilyChange(family)
+    });
     this.initThreeJS(canvasContainer, nodes);
     this.setupControls(controlsDiv, nodes);
+    this.setupLensControls(controlsDiv);
+    const activeLens = this.lensManager.getActiveLens();
+    if (activeLens) {
+      this.applyLens(activeLens);
+      this.updateLensUI(activeLens.name);
+    }
   }
-  extractNodes(smart_env) {
-    var _a, _b;
-    const sources = smart_env.smart_sources.items;
+  async extractNodes(smart_env) {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n;
+    try {
+      let guard = 0;
+      while (!(smart_env == null ? void 0 : smart_env.collections_loaded) && guard++ < 50) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    } catch (e) {
+    }
+    const items = (_b = (_a = smart_env.smart_sources) == null ? void 0 : _a.items) != null ? _b : {};
     const nodes = [];
-    for (const [key, source] of Object.entries(sources)) {
-      const s = source;
-      if (!s.vec || s.vec.length === 0)
+    const options = { limit: 12, threshold: 0.5 };
+    const awaitMaybe = async (v) => v && typeof v.then === "function" ? await v : v;
+    const defaultFindOpts = { limit: 12, threshold: 0.4 };
+    const allNoteKeys = new Set(Object.keys(items));
+    let count = 0;
+    for (const [key, src] of Object.entries(items)) {
+      const s = src;
+      if (!Array.isArray(s == null ? void 0 : s.vec) || s.vec.length === 0)
         continue;
       const connections = [];
       try {
-        const nearest = (_b = (_a = smart_env.smart_sources).find_connections) == null ? void 0 : _b.call(_a, key, {
-          limit: 10,
-          threshold: 0.7
-        });
-        if (nearest && Array.isArray(nearest)) {
-          connections.push(...nearest.map((n) => n.key));
+        let res;
+        if (typeof s.find_connections === "function") {
+          res = await awaitMaybe(s.find_connections(options));
+        } else if (typeof ((_c = smart_env.smart_sources) == null ? void 0 : _c.find_connections) === "function") {
+          res = await awaitMaybe(smart_env.smart_sources.find_connections(key, options));
+        }
+        if (Array.isArray(res)) {
+          for (const conn of res) {
+            const item = conn == null ? void 0 : conn.item;
+            const candidateNoteKey = (_g = (_f = (_d = item == null ? void 0 : item.note_key) != null ? _d : item == null ? void 0 : item.source_key) != null ? _f : (_e = item == null ? void 0 : item.note) == null ? void 0 : _e.key) != null ? _g : null;
+            const candidateRawKey = (_i = (_h = conn == null ? void 0 : conn.key) != null ? _h : item == null ? void 0 : item.key) != null ? _i : null;
+            const neighbor = candidateNoteKey && allNoteKeys.has(candidateNoteKey) ? candidateNoteKey : candidateRawKey && allNoteKeys.has(candidateRawKey) ? candidateRawKey : null;
+            if (neighbor)
+              connections.push(neighbor);
+          }
         }
       } catch (e) {
+        console.warn("find_connections failed for", key, e);
       }
+      const tags = Array.isArray(s.tags) ? s.tags.map((t) => t.toLowerCase()) : [];
+      const isExtracted = s.is_extracted === true || tags.length === 0 && s.auto_generated === true;
+      const pinCount = s.pin_count || s.pins || 0;
       nodes.push({
         key,
         name: s.name || s.path || key,
@@ -20140,8 +22269,23 @@ var ThreeDView = class extends import_obsidian.ItemView {
         embedding: s.vec,
         mtime: s.mtime || Date.now(),
         size: s.size || 0,
-        connections
+        connections,
+        tags,
+        pinCount,
+        isExtracted
       });
+    }
+    const withEdges = nodes.filter((n) => n.connections.length > 0).length;
+    console.log("[SC-3D] nodes:", nodes.length, "nodesWithConnections:", withEdges);
+    if (nodes[0]) {
+      try {
+        const probe = await awaitMaybe(
+          (_n = (_k = (_j = items[nodes[0].key]) == null ? void 0 : _j.find_connections) == null ? void 0 : _k.call(_j, defaultFindOpts)) != null ? _n : (_m = (_l = smart_env.smart_sources) == null ? void 0 : _l.find_connections) == null ? void 0 : _m.call(_l, nodes[0].key, defaultFindOpts)
+        );
+        console.log("[SC-3D] probe for", nodes[0].key, "\u2192", probe);
+      } catch (e) {
+        console.warn("[SC-3D] probe failed", e);
+      }
     }
     return nodes;
   }
@@ -20180,6 +22324,14 @@ var ThreeDView = class extends import_obsidian.ItemView {
     this.layout = new SemanticLayout(nodes);
     const positions = this.layout.compute(100);
     this.createNodes(nodes, positions);
+    console.log(
+      "Loaded nodes:",
+      nodes.length,
+      "with connections:",
+      nodes.filter((n) => n.connections.length > 0).length
+    );
+    this.createEdges(nodes);
+    this.applyQueryTokens(this.activeQueryTokens);
     this.setupInteraction(container);
     this.animate();
     this.resizeObserver = new ResizeObserver(() => {
@@ -20191,27 +22343,70 @@ var ThreeDView = class extends import_obsidian.ItemView {
     });
     this.resizeObserver.observe(container);
   }
-  createNodes(nodesData, positions) {
+  createEdges(_nodes) {
+    var _a;
     if (!this.scene)
       return;
+    const keyToNode = /* @__PURE__ */ new Map();
+    this.nodes.forEach((m) => keyToNode.set(m.userData.key, m));
+    const positions = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const mesh of this.nodes) {
+      const data = mesh.userData;
+      for (const tgt of (_a = data.connections) != null ? _a : []) {
+        const other = keyToNode.get(tgt);
+        if (!other)
+          continue;
+        const id = [data.key, tgt].sort().join("|");
+        if (seen.has(id))
+          continue;
+        seen.add(id);
+        positions.push(
+          mesh.position.x,
+          mesh.position.y,
+          mesh.position.z,
+          other.position.x,
+          other.position.y,
+          other.position.z
+        );
+      }
+    }
+    const geom = new BufferGeometry();
+    geom.setAttribute("position", new Float32BufferAttribute(positions, 3));
+    const mat = new LineBasicMaterial({ color: 6591999, transparent: true, opacity: 0.3 });
+    const lines = new LineSegments(geom, mat);
+    this.scene.add(lines);
+    this.edges = lines;
+    console.log("[SC-3D] edges built:", positions.length / 6, "segments");
+  }
+  createNodes(nodesData, positions) {
+    if (!this.scene || !this.colorStrategy)
+      return;
     nodesData.forEach((data) => {
+      var _a;
       const pos = positions.get(data.key);
       if (!pos)
         return;
-      const age = (Date.now() - data.mtime) / (365 * 24 * 60 * 60 * 1e3);
-      const hue = (0.55 + age * 0.15) % 1;
-      const color = new Color().setHSL(hue, 0.7, 0.6);
-      const geometry = new SphereGeometry(0.6, 16, 16);
+      const visualState = this.colorStrategy.getNodeVisualState(
+        data.tags || [],
+        data.mtime,
+        ((_a = data.connections) == null ? void 0 : _a.length) || 0,
+        data.pinCount || 0,
+        data.isExtracted || false,
+        false
+      );
+      const geometry = new SphereGeometry(visualState.size, 16, 16);
       const material = new MeshPhongMaterial({
-        color,
-        emissive: color,
-        emissiveIntensity: 0.5,
+        color: visualState.fillColor,
+        emissive: visualState.emissiveColor,
+        emissiveIntensity: visualState.emissiveIntensity * (1 + visualState.haloIntensity),
         transparent: true,
         opacity: 0.9
       });
       const mesh = new Mesh(geometry, material);
       mesh.position.set(pos.x, pos.y, pos.z);
       mesh.userData = data;
+      mesh.userData.visualState = visualState;
       this.scene.add(mesh);
       this.nodes.push(mesh);
       const label = this.createLabelSprite(data.name);
@@ -20230,22 +22425,60 @@ var ThreeDView = class extends import_obsidian.ItemView {
     let hoveredNode = null;
     const tooltip = document.createElement("div");
     tooltip.className = "smart-3d-tooltip";
-    container.appendChild(tooltip);
+    tooltip.style.position = "fixed";
+    tooltip.style.pointerEvents = "none";
+    tooltip.style.top = "0";
+    tooltip.style.left = "0";
+    tooltip.style.transform = "translate3d(-9999px,-9999px,0)";
+    document.body.appendChild(tooltip);
     const updateHover = (e) => {
+      var _a2, _b2;
       const rect = canvas.getBoundingClientRect();
       mouse.x = (e.clientX - rect.left) / rect.width * 2 - 1;
       mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(mouse, this.camera);
       const intersects = raycaster.intersectObjects(this.nodes);
       if (hoveredNode) {
-        hoveredNode.material.emissiveIntensity = 0.5;
-        hoveredNode.scale.set(1, 1, 1);
+        this.hoveredNode = null;
+        const prevData = hoveredNode.userData;
+        if (this.colorStrategy) {
+          const visualState = this.colorStrategy.getNodeVisualState(
+            prevData.tags || [],
+            prevData.mtime,
+            ((_a2 = prevData.connections) == null ? void 0 : _a2.length) || 0,
+            prevData.pinCount || 0,
+            prevData.isExtracted || false,
+            false
+          );
+          const mat = hoveredNode.material;
+          mat.emissiveIntensity = visualState.emissiveIntensity * (1 + visualState.haloIntensity);
+          const s = visualState.size;
+          hoveredNode.scale.set(s, s, s);
+        }
       }
       if (intersects.length > 0) {
         hoveredNode = intersects[0].object;
-        hoveredNode.material.emissiveIntensity = 1.2;
-        hoveredNode.scale.set(1.5, 1.5, 1.5);
+        this.hoveredNode = hoveredNode;
         const data = hoveredNode.userData;
+        if (this.colorStrategy) {
+          const visualState = this.colorStrategy.getNodeVisualState(
+            data.tags || [],
+            data.mtime,
+            ((_b2 = data.connections) == null ? void 0 : _b2.length) || 0,
+            data.pinCount || 0,
+            data.isExtracted || false,
+            true
+            // isHovered = true
+          );
+          const mat = hoveredNode.material;
+          mat.emissiveIntensity = 1.2 * (1 + visualState.haloIntensity);
+          if (visualState.outlineColor && visualState.outlineGlowIntensity) {
+            hoveredNode.userData.outlineColor = visualState.outlineColor;
+            hoveredNode.userData.outlineGlowIntensity = visualState.outlineGlowIntensity;
+          }
+          const s = visualState.size * 1.3;
+          hoveredNode.scale.set(s, s, s);
+        }
         tooltip.textContent = data.name;
         tooltip.style.display = "block";
         tooltip.style.left = e.clientX + 10 + "px";
@@ -20253,6 +22486,7 @@ var ThreeDView = class extends import_obsidian.ItemView {
         canvas.style.cursor = "pointer";
       } else {
         hoveredNode = null;
+        this.hoveredNode = null;
         tooltip.style.display = "none";
         canvas.style.cursor = "grab";
       }
@@ -20265,10 +22499,11 @@ var ThreeDView = class extends import_obsidian.ItemView {
     });
     canvas.addEventListener("click", () => {
       raycaster.setFromCamera(mouse, this.camera);
-      const intersects = raycaster.intersectObjects(this.nodes);
-      if (intersects.length > 0) {
-        const data = intersects[0].object.userData;
-        this.openNote(data.path);
+      const hit = raycaster.intersectObjects(this.nodes)[0];
+      if (hit) {
+        const info = hit.object.userData.explain || [];
+        console.info("Explain:", hit.object.userData.name, info);
+        this.openNote(hit.object.userData.path);
       }
     });
     canvas.style.cursor = "grab";
@@ -20284,6 +22519,42 @@ var ThreeDView = class extends import_obsidian.ItemView {
     (_b = this.controls) == null ? void 0 : _b.addEventListener("end", () => {
       canvas.style.cursor = hoveredNode ? "pointer" : "grab";
     });
+  }
+  setupLensControls(controlsDiv) {
+    const switcherBtn = controlsDiv.querySelector("#lens-switcher-btn");
+    const saveBtn = controlsDiv.querySelector("#lens-save-btn");
+    const updateBtn = controlsDiv.querySelector("#lens-update-btn");
+    switcherBtn == null ? void 0 : switcherBtn.addEventListener("click", () => {
+      this.openLensQuickSwitcher();
+    });
+    saveBtn == null ? void 0 : saveBtn.addEventListener("click", () => {
+      const name = prompt("Enter lens name:");
+      if (name) {
+        const lens = this.saveAsLens(name);
+        this.updateLensUI(lens.name);
+        if (updateBtn)
+          updateBtn.disabled = false;
+      }
+    });
+    updateBtn == null ? void 0 : updateBtn.addEventListener("click", () => {
+      this.updateCurrentLens();
+    });
+    this.registerDomEvent(document, "keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "l") {
+        e.preventDefault();
+        this.openLensQuickSwitcher();
+      }
+    });
+  }
+  updateLensUI(lensName) {
+    const nameEl = document.querySelector("#lens-active-name");
+    const updateBtn = document.querySelector("#lens-update-btn");
+    if (nameEl) {
+      nameEl.textContent = lensName || "None";
+    }
+    if (updateBtn) {
+      updateBtn.disabled = !lensName;
+    }
   }
   setupControls(controlsDiv, nodes) {
     const semanticSlider = controlsDiv.querySelector("#semantic-slider");
@@ -20329,10 +22600,20 @@ var ThreeDView = class extends import_obsidian.ItemView {
       setTimeout(() => {
         const positions = this.layout.compute(100);
         this.createNodes(nodes, positions);
+        this.applyQueryTokens(this.activeQueryTokens);
         status.textContent = `${nodes.length} notes`;
         recomputeBtn.disabled = false;
       }, 50);
     });
+  }
+  onOmniboxTokensChanged(tokens) {
+    console.log("onOmniboxTokensChanged fired:", tokens);
+    this.facetAST.fromOmniboxTokens(tokens);
+    const facetTokens = this.facetAST.toOmniboxTokens();
+    const userTokens = tokens.filter((t) => !t.id.startsWith("facet-"));
+    const mergedTokens = [...userTokens, ...facetTokens];
+    this.activeQueryTokens = mergedTokens;
+    this.debouncedApply(mergedTokens);
   }
   openNote(path) {
     const file = this.app.vault.getAbstractFileByPath(path);
@@ -20352,15 +22633,51 @@ var ThreeDView = class extends import_obsidian.ItemView {
       if (!label || !this.camera)
         return;
       const distance = this.camera.position.distanceTo(node.position);
-      label.visible = distance < 45;
+      label.visible = node.visible && distance < 45;
       label.position.set(node.position.x, node.position.y + 1.8, node.position.z);
       const scale = MathUtils.clamp((50 - distance) / 25, 0.45, 1.2);
       label.scale.setScalar(scale);
     });
+    if (this.edges) {
+      const geom = this.edges.geometry;
+      const posAttr = geom.getAttribute("position");
+      const arr = posAttr.array;
+      let i = 0;
+      const keyToNode = /* @__PURE__ */ new Map();
+      this.nodes.forEach((n) => keyToNode.set(n.userData.key, n));
+      const seen = /* @__PURE__ */ new Set();
+      for (const mesh of this.nodes) {
+        const data = mesh.userData;
+        if (!data.connections)
+          continue;
+        for (const targetKey of data.connections) {
+          const target = keyToNode.get(targetKey);
+          if (!target)
+            continue;
+          const edgeId = [data.key, targetKey].sort().join("|");
+          if (seen.has(edgeId))
+            continue;
+          seen.add(edgeId);
+          if (!mesh.visible || !target.visible)
+            continue;
+          const p1 = mesh.position;
+          const p2 = target.position;
+          arr[i++] = p1.x;
+          arr[i++] = p1.y;
+          arr[i++] = p1.z;
+          arr[i++] = p2.x;
+          arr[i++] = p2.y;
+          arr[i++] = p2.z;
+        }
+      }
+      for (; i < arr.length; i++)
+        arr[i] = 0;
+      posAttr.needsUpdate = true;
+    }
     this.renderer.render(this.scene, this.camera);
   }
   async onClose() {
-    var _a, _b;
+    var _a, _b, _c, _d, _e;
     if (this.animationId !== null) {
       cancelAnimationFrame(this.animationId);
     }
@@ -20381,6 +22698,13 @@ var ThreeDView = class extends import_obsidian.ItemView {
       label.material.dispose();
     });
     this.labels.clear();
+    (_c = this.omnibox) == null ? void 0 : _c.destroy();
+    this.omnibox = null;
+    this.activeQueryTokens = [];
+    (_d = this.facetRail) == null ? void 0 : _d.destroy();
+    this.facetRail = null;
+    (_e = this.legend) == null ? void 0 : _e.destroy();
+    this.legend = null;
   }
   createLabelSprite(text) {
     const padding = 16;
@@ -20502,7 +22826,7 @@ var SemanticLayout = class {
         f2.y += dy / dist * repForce;
         f2.z += dz / dist * repForce;
         const sim = this.cosineSim(n1.embedding, n2.embedding);
-        if (sim > 0.7) {
+        if (sim > 0.6) {
           const semForce = this.config.semanticAttraction * sim * (dist - 15);
           f1.x += dx / dist * semForce;
           f1.y += dy / dist * semForce;
